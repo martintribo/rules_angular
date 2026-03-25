@@ -2,9 +2,9 @@
 
 load("@jq.bzl//jq:jq.bzl", "jq")
 
-# JQ expressions to update Angular project output paths from dist/* to projects/*/dist
-# We do this to avoid mutating the files in the source tree, so that the native tooling without Bazel continues to work.
-# Note: This assumes that 1P linking projects follow the `projects/<project>/` folder structure.
+# Strip tsconfig paths that point outside the project dir.
+# In Bazel, workspace packages resolve through node_modules (set up by npm_link_all_packages),
+# not tsconfig paths pointing to source files.
 JQ_DIST_REPLACE_TSCONFIG = """
     .compilerOptions.paths |= if . then
       with_entries(select(.value | all(startswith("..") | not)))
@@ -13,14 +13,23 @@ JQ_DIST_REPLACE_TSCONFIG = """
     | .compilerOptions |= with_entries(select(.value != null))
 """
 
-# Similarly update paths in angular.json
-# This time we can properly know the project root and have the `dist` folder
-# local to the BUILD file of the target/project.
+# Update angular.json for Bazel:
+# - Redirect output paths to be local to the BUILD file
+# - For esbuild application builders, swap to @angular-builders/custom-esbuild
+#   and inject the bazel-sandbox plugin (esbuild is a Go binary that bypasses
+#   Node's patched fs, so it needs a plugin to remap sandbox-escaping paths)
 JQ_DIST_REPLACE_ANGULAR = """
 (
   .projects | to_entries | map(
     if .value.projectType == "application" then
       .value.architect.build.options.outputPath = "./" + .value.root + "/dist"
+      |
+      if .value.architect.build.builder == "@angular/build:application" then
+        .value.architect.build.builder = "@angular-builders/custom-esbuild:application"
+        | .value.architect.build.options.plugins = ["./esbuild/bazel-sandbox.js"]
+      else
+        .
+      end
     else
       .
     end
@@ -44,8 +53,16 @@ def ng_config(name, **kwargs):
         filter = JQ_DIST_REPLACE_TSCONFIG,
     )
 
+    # Copy the bazel-sandbox esbuild plugin so it's available in the sandbox
+    native.genrule(
+        name = "_esbuild_sandbox_plugin",
+        srcs = [Label("//src/architect/esbuild:bazel-sandbox.js")],
+        outs = ["esbuild/bazel-sandbox.js"],
+        cmd = "cp $< $@",
+    )
+
     native.filegroup(
         name = name,
-        srcs = [":angular", ":tsconfig"],
+        srcs = [":angular", ":tsconfig", ":_esbuild_sandbox_plugin"],
         **kwargs
     )
