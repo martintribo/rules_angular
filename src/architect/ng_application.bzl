@@ -8,9 +8,10 @@ APPLICATION_CONFIG = [
     ":tsconfig.app.json",
 ]
 
-# # Typical dependencies of angular apps
+# Typical dependencies of angular apps
 NPM_DEPS = lambda node_modules: ["/".join([node_modules, s]) for s in [
     "@angular",  # Take all of them, since the list varies across angular versions
+    "@angular-builders/custom-esbuild",  # Used by ng_config for esbuild sandbox support
     "rxjs",
     "tslib",
 ]]
