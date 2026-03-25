@@ -6,11 +6,11 @@ load("@jq.bzl//jq:jq.bzl", "jq")
 # We do this to avoid mutating the files in the source tree, so that the native tooling without Bazel continues to work.
 # Note: This assumes that 1P linking projects follow the `projects/<project>/` folder structure.
 JQ_DIST_REPLACE_TSCONFIG = """
-    .compilerOptions.paths |= if . then map_values(
-      map(
-        gsub("^dist/(?<p>.+)$"; "projects/"+.p+"/dist")
-      )
-    ) else {} end
+    .compilerOptions.paths |= if . then
+      with_entries(select(.value | all(startswith("..") | not)))
+      | if . == {} then null else . end
+    else null end
+    | .compilerOptions |= with_entries(select(.value != null))
 """
 
 # Similarly update paths in angular.json
