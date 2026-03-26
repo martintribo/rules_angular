@@ -18,7 +18,7 @@ JQ_DIST_REPLACE_TSCONFIG = """
 # - For esbuild application builders, swap to @angular-builders/custom-esbuild
 #   and inject the bazel-sandbox plugin (esbuild is a Go binary that bypasses
 #   Node's patched fs, so it needs a plugin to remap sandbox-escaping paths)
-JQ_DIST_REPLACE_ANGULAR = """
+JQ_DIST_REPLACE_ANGULAR_WITH_ESBUILD_PATCH = """
 (
   .projects | to_entries | map(
     if .value.projectType == "application" then
@@ -38,12 +38,37 @@ JQ_DIST_REPLACE_ANGULAR = """
 . * {projects: $updated}
 """
 
+# Update angular.json for Bazel without esbuild patching:
+# - Redirect output paths only
+JQ_DIST_REPLACE_ANGULAR_NO_PATCH = """
+(
+  .projects | to_entries | map(
+    if .value.projectType == "application" then
+      .value.architect.build.options.outputPath = "./" + .value.root + "/dist"
+    else
+      .
+    end
+  ) | from_entries
+) as $updated |
+. * {projects: $updated}
+"""
+
 # buildifier: disable=function-docstring
-def ng_config(name, **kwargs):
+def ng_config(name, patch_esbuild = True, **kwargs):
+    """Create ng_config targets for Angular workspace configuration.
+
+    Args:
+        name: Name of the config target
+        patch_esbuild: If True (default), swap @angular/build:application to
+            @angular-builders/custom-esbuild:application and inject the
+            bazel-sandbox plugin. Set to False for Angular versions that
+            handle sandbox resolution natively.
+        **kwargs: Additional arguments
+    """
     jq(
         name = "angular",
         srcs = ["angular.json"],
-        filter = JQ_DIST_REPLACE_ANGULAR,
+        filter = JQ_DIST_REPLACE_ANGULAR_WITH_ESBUILD_PATCH if patch_esbuild else JQ_DIST_REPLACE_ANGULAR_NO_PATCH,
     )
 
     # NOTE: project dist directories are under the project dir unlike the Angular CLI default of the root dist folder
@@ -53,16 +78,20 @@ def ng_config(name, **kwargs):
         filter = JQ_DIST_REPLACE_TSCONFIG,
     )
 
-    # Copy the bazel-sandbox esbuild plugin so it's available in the sandbox
-    native.genrule(
-        name = "_esbuild_sandbox_plugin",
-        srcs = [Label("//src/architect/esbuild:bazel-sandbox.js")],
-        outs = ["esbuild/bazel-sandbox.js"],
-        cmd = "cp $< $@",
-    )
+    filegroup_srcs = [":angular", ":tsconfig"]
+
+    if patch_esbuild:
+        # Copy the bazel-sandbox esbuild plugin so it's available in the sandbox
+        native.genrule(
+            name = "_esbuild_sandbox_plugin",
+            srcs = [Label("//src/architect/esbuild:bazel-sandbox.js")],
+            outs = ["esbuild/bazel-sandbox.js"],
+            cmd = "cp $< $@",
+        )
+        filegroup_srcs.append(":_esbuild_sandbox_plugin")
 
     native.filegroup(
         name = name,
-        srcs = [":angular", ":tsconfig", ":_esbuild_sandbox_plugin"],
+        srcs = filegroup_srcs,
         **kwargs
     )
